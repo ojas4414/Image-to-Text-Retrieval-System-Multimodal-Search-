@@ -49,8 +49,8 @@ Cyberpunk.ipynb → notebook pipeline
 Clone the repository:
 
 ```
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
-cd YOUR_REPO
+git clone https://github.com/ojas4414/Image-to-Text-Retrieval-System-Multimodal-Search-.git
+
 ```
 
 Install dependencies:
