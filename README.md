@@ -1,119 +1,186 @@
-# Cyberpunk Image Analysis & RAG Retrieval System
+<div align="center">
 
-## Overview
+# 🌃 Image-to-Text Retrieval System — Multimodal Search
 
-This project builds an intelligent system that analyses cyberpunk-themed images and retrieves relevant information using Retrieval-Augmented Generation (RAG).
+### Caption · Retrieve · Reason — a CLIP + BLIP + FAISS + FLAN-T5 RAG pipeline, served over FastAPI
 
-The pipeline combines computer vision, semantic embeddings, and vector search to generate meaningful descriptions and enable question-answering over visual data.
+<p>
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch"/>
+  <img src="https://img.shields.io/badge/Hugging%20Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Hugging Face"/>
+  <img src="https://img.shields.io/badge/FAISS-0467DF?style=for-the-badge&logo=meta&logoColor=white" alt="FAISS"/>
+  <img src="https://img.shields.io/badge/Uvicorn-2094F3?style=for-the-badge&logo=gunicorn&logoColor=white" alt="Uvicorn"/>
+  <img src="https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white" alt="NumPy"/>
+  <img src="https://img.shields.io/badge/pandas-150458?style=for-the-badge&logo=pandas&logoColor=white" alt="pandas"/>
+</p>
 
----
-
-## Features
-
-• Automatic image captioning using **BLIP**
-• Visual understanding using **CLIP embeddings**
-• Semantic text embeddings with **Sentence Transformers**
-• Fast similarity search using **FAISS**
-• Retrieval-Augmented Generation (RAG) for context-aware answers
-• Metadata indexing for efficient search
-
----
-
-## How It Works
-
-1. Images are processed to generate captions.
-2. Visual features are extracted using CLIP.
-3. Text and image embeddings are stored in a FAISS index.
-4. Queries are embedded and matched against stored vectors.
-5. Relevant context is retrieved and used to generate responses.
-
-This enables semantic search and intelligent question answering over image collections.
+</div>
 
 ---
 
-## Project Structure
+## 📖 Overview
+
+This project takes an input image and runs it through a **multimodal retrieval-augmented pipeline**:
+
+1. **Caption** the image with **BLIP**.
+2. **Embed** the image with **CLIP** and the caption with **Sentence-Transformers (MiniLM)**.
+3. **Retrieve** the most similar images and texts from **FAISS** indexes.
+4. **Reason** over the retrieved context with **FLAN-T5** to answer a free-form question.
+
+Originally a Google Colab notebook, it has been ported into a clean, local **FastAPI** backend with three endpoints. **No model/function logic was rewritten** during the port — the `generate_caption`, `image_embedding`, `text_embedding`, `FaissIndex`, and `generate_answer` implementations are copied verbatim from the notebook; only Colab-specific glue (Drive mounts, `files.upload()`, ngrok tunnels) was removed and one path bug was fixed.
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    subgraph Client
+        U([User / HTTP Client])
+    end
+
+    subgraph API["⚡ FastAPI  (backend/main.py)"]
+        ING[/POST /ingest/]
+        SRCH[/POST /search/]
+        QRY[/POST /query/]
+    end
+
+    subgraph Extractors["🧠 extractors.py"]
+        BLIP[BLIP<br/>generate_caption]
+        CLIP[CLIP<br/>image_embedding]
+        SBERT[MiniLM<br/>text_embedding]
+    end
+
+    subgraph RAG["💬 rag.py"]
+        T5[FLAN-T5<br/>generate_answer]
+    end
+
+    subgraph Store["🗂️ indexer.py + disk"]
+        IMGIDX[(FAISS<br/>image_index)]
+        TXTIDX[(FAISS<br/>text_index)]
+        META[[metadata.csv]]
+        IMGS[[data/images/]]
+    end
+
+    U -->|image| API
+
+    ING --> META
+    ING --> CLIP --> IMGIDX
+    ING --> SBERT --> TXTIDX
+    ING -. BLIP fallback .-> BLIP
+
+    SRCH --> CLIP --> IMGIDX
+    IMGIDX -->|top-k ids + scores| SRCH --> U
+
+    QRY --> BLIP --> CLIP
+    QRY --> SBERT --> TXTIDX
+    CLIP --> IMGIDX
+    TXTIDX -->|retrieved texts| T5
+    META --> T5
+    T5 -->|answer| QRY --> U
+```
+
+**Pipeline at a glance:**
+
+| Stage | Component | Model / Tool |
+|-------|-----------|--------------|
+| Captioning | `generate_caption` | `Salesforce/blip-image-captioning-base` |
+| Image embedding | `image_embedding` | `openai/clip-vit-base-patch32` |
+| Text embedding | `text_embedding` | `all-MiniLM-L6-v2` |
+| Vector search | `FaissIndex` | FAISS `IndexFlatIP` (cosine via normalized vectors) |
+| Answer generation | `generate_answer` | `google/flan-t5-small` |
+
+---
+
+## 📁 Project Structure
 
 ```
-backend/        → core retrieval & processing logic
-frontend/       → interface/app layer
-data/           → image dataset
-indexes/        → FAISS vector indexes
-models/         → trained models (optional)
-Cyberpunk.ipynb → notebook pipeline
+.
+├── backend/
+│   ├── extractors.py   # generate_caption, image_embedding, text_embedding  (verbatim)
+│   ├── indexer.py      # FaissIndex class                                    (verbatim)
+│   ├── rag.py          # generate_answer                                     (verbatim)
+│   └── main.py         # FastAPI app — /ingest, /search, /query
+├── data/
+│   └── images/         # image dataset  (img_001.jpg … img_007.jpg)
+├── indexes/            # FAISS index files written by /ingest
+├── metadata.csv        # id, filename, caption, tags, description
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## Installation
+## 🔌 API Endpoints
 
-Clone the repository:
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/ingest` | Runs the indexing loop over `metadata.csv` and builds + saves the FAISS image & text indexes. |
+| `POST` | `/search` | Multipart `file` (+ optional `top_k`). Returns the top-k most similar dataset images via CLIP. |
+| `POST` | `/query` | Multipart `file` (+ optional `question`). Full pipeline: caption → retrieve → `generate_answer`. |
 
+### Example requests
+
+```bash
+# 1. Build the indexes (run once after adding images)
+curl -X POST http://127.0.0.1:8000/ingest
+
+# 2. Find similar images
+curl -X POST http://127.0.0.1:8000/search \
+  -F "file=@/path/to/query.jpg" \
+  -F "top_k=5"
+
+# 3. Ask a question about an image
+curl -X POST http://127.0.0.1:8000/query \
+  -F "file=@/path/to/query.jpg" \
+  -F "question=What technology or weapon is visible?"
 ```
-git clone https://github.com/ojas4414/Image-to-Text-Retrieval-System-Multimodal-Search-.git
 
-```
+---
 
-Install dependencies:
+## 🚀 Getting Started
 
-```
+```bash
+# 1. Install dependencies
 pip install -r requirements.txt
+
+# 2. Add your dataset images to data/images/  (matching the filenames in metadata.csv)
+
+# 3. Launch the API
+uvicorn backend.main:app --reload
+
+# 4. Open the interactive docs
+#    http://127.0.0.1:8000/docs
 ```
 
----
-
-## Usage
-
-Run the notebook or backend pipeline to:
-
-* generate captions
-* build vector index
-* perform semantic search
-* answer queries based on image context
-
-Example query:
-
-```
-"Find neon-lit street scenes with heavy rain"
-```
+> ⚠️ **First run downloads models** (BLIP, CLIP, MiniLM, FLAN-T5) from Hugging Face — this can take a few minutes and several GB. Subsequent runs use the local cache. Runs on CPU; uses CUDA automatically if available.
 
 ---
 
-## Technologies Used
+## 🔧 Notes on the Colab → FastAPI Port
 
-* PyTorch
-* Transformers (Huggingface)
-* Sentence Transformers
-* FAISS
-* Pandas & NumPy
-
----
-
-## Future Improvements
-
-* Web interface for search
-* Real-time query responses
-* Larger dataset support
-* Fine-tuned reranking models
-* Deployment as API
+| Change | Detail |
+|--------|--------|
+| **Removed** | `drive.mount()`, `google.colab.files.upload()`, `pyngrok` / ngrok tunneling, Colab `!shell` cells. |
+| **File uploads** | Now handled by FastAPI `UploadFile` + `python-multipart` instead of `files.upload()`. |
+| **Paths** | `PROJECT_ROOT` is derived from the backend folder location (local filesystem), replacing the hard-coded Drive path. |
+| **🐛 Bug fixed** | Image paths were built as `os.path.join(PROJECT_ROOT, "data_metadata_template.csv", filename)` — a **filename used as a folder**, so lookups always failed. Corrected to `os.path.join(PROJECT_ROOT, "data", "images", filename)` in all three places. |
+| **Logic** | The five core functions/classes were **copied verbatim** — no logic was rewritten or "improved". |
 
 ---
 
-## Notebook
+## 🧬 Tech Stack
 
-Open directly in Google Colab:
+**Models:** BLIP · CLIP · Sentence-Transformers (MiniLM) · FLAN-T5
+**Serving:** FastAPI · Uvicorn · python-multipart
+**Vector search:** FAISS (`IndexFlatIP`)
+**Core:** PyTorch · Hugging Face Transformers · NumPy · pandas · Pillow
 
-```
-https://colab.research.google.com/github/YOUR_USERNAME/YOUR_REPO/blob/main/Cyberpunk.ipynb
-```
-
----
-
-## Why This Project Matters
-
-This project demonstrates how multimodal AI systems combine vision, language, and retrieval techniques to build intelligent search systems — a key capability in modern AI applications.
+<div align="center">
 
 ---
 
-## Author
+Made with ⚡ for multimodal retrieval
 
-Built as part of an exploration into multimodal AI, semantic retrieval, and intelligent search systems.
+</div>
